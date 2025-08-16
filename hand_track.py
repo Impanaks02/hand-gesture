@@ -23,29 +23,21 @@ while cap.isOpened():
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     results = hands.process(rgb_frame)
 
-    # --- NEW CODE START ---
     min_x, min_y = w, h
     max_x, max_y = 0, 0
     box_found = False
 
     if results.multi_hand_landmarks and len(results.multi_hand_landmarks) >= 1:
-        # We need to collect coordinates from all hands before drawing
         all_finger_tip_coords = []
         
-        # Loop through each hand that was found
         for hand_landmarks in results.multi_hand_landmarks:
-            # Get the thumb and index finger tip landmarks for the current hand
+            # We are not drawing the full landmarks, but we still need the tips for the bounding box
             thumb_tip = hand_landmarks.landmark[mp_hands.HandLandmark.THUMB_TIP]
             index_finger_tip = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP]
 
-            # Convert to pixel coordinates and add to our list
             all_finger_tip_coords.append((int(thumb_tip.x * w), int(thumb_tip.y * h)))
             all_finger_tip_coords.append((int(index_finger_tip.x * w), int(index_finger_tip.y * h)))
-
-            # Still draw the landmarks on each hand for visualization
-            mp_drawing.draw_landmarks(
-                frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
-
+        
         # Now that we have all the coordinates, find the min/max across all of them
         if all_finger_tip_coords:
             min_x = min(x for x, y in all_finger_tip_coords)
@@ -62,8 +54,6 @@ while cap.isOpened():
         
         cv2.putText(frame, f'W: {box_width}, H: {box_height}', (min_x, min_y - 10), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-
-    # --- NEW CODE END ---
 
     cv2.imshow('Hand Tracker', frame)
 

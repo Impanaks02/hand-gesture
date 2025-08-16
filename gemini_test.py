@@ -60,7 +60,8 @@ while cap.isOpened():
             index_finger_tip = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP]
             all_finger_tip_coords.append((int(thumb_tip.x * w), int(thumb_tip.y * h)))
             all_finger_tip_coords.append((int(index_finger_tip.x * w), int(index_finger_tip.y * h)))
-            mp_drawing.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+            # --- REMOVE THESE MARKS BY COMMENTING OUT THE LINE BELOW ---
+            # mp_drawing.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
         
         if all_finger_tip_coords:
             min_x = min(x for x, y in all_finger_tip_coords)
@@ -76,51 +77,41 @@ while cap.isOpened():
         box_height = max_y - min_y
 
         if poem_generated:
-            # --- DYNAMIC FONT SIZING AND RENDERING ---
+            dynamic_font_size = 100 
             
-            # 1. Start with a reasonable font size
-            dynamic_font_size = 30
-            
-            # 2. Iterate to find the best-fitting font size
-            # We'll use a tolerance of a few pixels to prevent infinite loops
-            text_area_width = box_width - 20
-            
-            # Loop to find the best font size
-            # A hardcoded limit to prevent crashing on very small boxes
             for i in range(100): 
                 try:
                     font = ImageFont.truetype(base_font_path, dynamic_font_size)
-                    avg_char_width = font.getlength('A')
-                    max_chars = int(text_area_width / avg_char_width)
                     
-                    if max_chars <= 0: # Ensure we have at least one character
+                    avg_char_width = font.getlength('A')
+                    if avg_char_width == 0:
                         max_chars = 1
+                    else:
+                        max_chars = int((box_width - 20) / avg_char_width)
                     
                     wrapped_lines = textwrap.wrap(poem_text, width=max_chars)
                     
-                    total_text_height = len(wrapped_lines) * font.getbbox('A')[3] * 1.2
+                    line_height = font.getbbox('A')[3] + 5
+                    total_text_height = len(wrapped_lines) * line_height
                     
-                    # If the text fits vertically, we can stop
                     if total_text_height < box_height:
                         break
                     
-                    dynamic_font_size -= 1 # Reduce font size if it doesn't fit
+                    dynamic_font_size -= 1
                 except (IOError, ValueError):
-                    # Handle font errors or division by zero
                     font = ImageFont.load_default()
                     break
 
-            # 3. Once the font size is found, draw the text
             pil_img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
             draw = ImageDraw.Draw(pil_img)
             
             padding = 10
             
-            if text_area_width > 0:
+            if box_width - 20 > 0:
                 text_y = min_y + padding
                 for line in wrapped_lines:
                     draw.text((min_x + padding, text_y), line, font=font, fill=(0, 255, 0))
-                    text_y += int(dynamic_font_size * 1.2)
+                    text_y += int(line_height)
 
             frame = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
