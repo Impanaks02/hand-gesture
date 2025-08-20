@@ -372,16 +372,27 @@ class HandPoemCreator:
         return None, frame
     
     def save_poems_to_file(self):
-        """Save all generated poems to JSON file"""
+        """Save all generated poems to JSON file in poems directory"""
         if not self.saved_poems:
             print("No poems to save!")
             return
-        
-        filename = f"poems_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    
+        # Create poems directory if it doesn't exist
+        poems_dir = "poems"
         try:
-            with open(filename, 'w', encoding='utf-8') as f:
+            os.makedirs(poems_dir, exist_ok=True)
+        except Exception as e:
+            print(f"Error creating poems directory: {e}")
+            return
+    
+        # Generate filename with timestamp
+        filename = f"poems_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        filepath = os.path.join(poems_dir, filename)
+    
+        try:
+            with open(filepath, 'w', encoding='utf-8') as f:
                 json.dump(self.saved_poems, f, indent=2, ensure_ascii=False)
-            print(f"Saved {len(self.saved_poems)} poems to {filename}")
+            print(f"Saved {len(self.saved_poems)} poems to {filepath}")
         except Exception as e:
             print(f"Error saving poems: {e}")
     
