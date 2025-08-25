@@ -19,9 +19,10 @@ class HandTracker:
         
         # UI Configuration
         self.colors = {
-            'box': (0, 255, 0),
-            'text': (255, 255, 255),
-            'background': (0, 0, 0),
+            'box': (0, 255, 255),  # Cyan for a modern look
+            'glow': (0, 255, 255),
+            'text': (255, 255, 255), # White for high contrast
+            'background': (20, 20, 20),
             'landmarks': (0, 255, 255),
             'connections': (255, 0, 255)
         }
@@ -60,88 +61,82 @@ class HandTracker:
         return tuple(map(int, avg_coords))
     
     def draw_ui_panel(self, frame):
-        """Draw information panel"""
+        """Draw a sleek information panel at the top"""
         h, w = frame.shape[:2]
         panel_height = 120
         
-        # Create semi-transparent panel
+        # Create a semi-transparent panel overlay with a smooth gradient effect
         overlay = frame.copy()
         cv2.rectangle(overlay, (0, 0), (w, panel_height), self.colors['background'], -1)
         frame = cv2.addWeighted(overlay, 0.7, frame, 0.3, 0)
         
-        # Title
-        cv2.putText(frame, "Enhanced Hand Tracker", (10, 30), 
-                   cv2.FONT_HERSHEY_DUPLEX, 1, self.colors['text'], 2)
+        # Draw a subtle line at the bottom of the panel for separation
+        cv2.line(frame, (0, panel_height), (w, panel_height), self.colors['box'], 2)
         
-        # Instructions
+        # Title with a different font for emphasis
+        cv2.putText(frame, "Enhanced Hand Tracker", (20, 45), 
+                    cv2.FONT_HERSHEY_COMPLEX, 1.2, self.colors['box'], 2)
+        
+        # Instructions and info
         instructions = [
             "Controls: 'l' - Toggle landmarks | 'f' - Toggle FPS | 'r' - Reset | 'q' - Quit",
             f"FPS: {self.current_fps:.1f}" if self.show_fps else "",
             f"Landmarks: {'ON' if self.show_landmarks else 'OFF'}"
         ]
         
-        y_offset = 55
+        y_offset = 80
         for instruction in instructions:
-            if instruction:  # Skip empty strings
-                cv2.putText(frame, instruction, (10, y_offset), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, self.colors['text'], 1)
-                y_offset += 20
+            if instruction:
+                cv2.putText(frame, instruction, (20, y_offset), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, self.colors['text'], 1)
+                y_offset += 25
         
         return frame
     
     def draw_enhanced_box(self, frame, box_coords, box_width, box_height):
-        """Draw enhanced bounding box with additional information"""
+        """Draw a visually enhanced bounding box with corner markers"""
         min_x, min_y, max_x, max_y = box_coords
         
-        # Main bounding box
-        cv2.rectangle(frame, (min_x, min_y), (max_x, max_y), self.colors['box'], 3)
+        # Add a "glow" effect by drawing a slightly larger, semi-transparent box
+        cv2.rectangle(frame, (min_x - 1, min_y - 1), (max_x + 1, max_y + 1), self.colors['glow'], 2)
+        cv2.rectangle(frame, (min_x, min_y), (max_x, max_y), self.colors['glow'], 1)
+
+        # Draw sleek corner markers
+        marker_size = 25
+        thickness = 2
+        # Top-left
+        cv2.line(frame, (min_x, min_y), (min_x + marker_size, min_y), self.colors['box'], thickness)
+        cv2.line(frame, (min_x, min_y), (min_x, min_y + marker_size), self.colors['box'], thickness)
+        # Top-right
+        cv2.line(frame, (max_x, min_y), (max_x - marker_size, min_y), self.colors['box'], thickness)
+        cv2.line(frame, (max_x, min_y), (max_x, min_y + marker_size), self.colors['box'], thickness)
+        # Bottom-left
+        cv2.line(frame, (min_x, max_y), (min_x + marker_size, max_y), self.colors['box'], thickness)
+        cv2.line(frame, (min_x, max_y), (min_x, max_y - marker_size), self.colors['box'], thickness)
+        # Bottom-right
+        cv2.line(frame, (max_x, max_y), (max_x - marker_size, max_y), self.colors['box'], thickness)
+        cv2.line(frame, (max_x, max_y), (max_x, max_y - marker_size), self.colors['box'], thickness)
         
-        # Corner markers
-        corner_size = 20
-        corners = [
-            (min_x, min_y), (max_x, min_y),
-            (min_x, max_y), (max_x, max_y)
-        ]
+        # Information box (now aligned to the top of the box)
+        info_x, info_y = min_x, max(min_y - 60, 130)
         
-        for corner in corners:
-            cv2.circle(frame, corner, 8, self.colors['box'], -1)
-            cv2.circle(frame, corner, 8, (255, 255, 255), 2)
+        # Draw a semi-transparent background for the info text
+        info_overlay = frame.copy()
+        cv2.rectangle(info_overlay, (info_x, info_y), (info_x + 220, info_y + 40), (0, 0, 0), -1)
+        cv2.addWeighted(info_overlay, 0.6, frame, 0.4, 0, frame)
+
+        # Information text
+        cv2.putText(frame, f'Width: {box_width}px', (info_x + 5, info_y + 15), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, self.colors['text'], 1)
+        cv2.putText(frame, f'Height: {box_height}px', (info_x + 5, info_y + 35), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, self.colors['text'], 1)
         
         # Center point
         center_x, center_y = (min_x + max_x) // 2, (min_y + max_y) // 2
-        cv2.circle(frame, (center_x, center_y), 5, (255, 0, 0), -1)
-        
-        # Information box
-        info_x, info_y = min_x, max(min_y - 60, 130)
-        
-        # Background for text
-        text_bg_coords = [
-            (info_x - 5, info_y - 25),
-            (info_x + 200, info_y + 15)
-        ]
-        cv2.rectangle(frame, text_bg_coords[0], text_bg_coords[1], 
-                     self.colors['background'], -1)
-        cv2.rectangle(frame, text_bg_coords[0], text_bg_coords[1], 
-                     self.colors['box'], 2)
-        
-        # Information text
-        cv2.putText(frame, f'Width: {box_width}px', (info_x, info_y), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, self.colors['text'], 2)
-        cv2.putText(frame, f'Height: {box_height}px', (info_x, info_y + 20), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, self.colors['text'], 2)
-        
-        # Area calculation
-        area = box_width * box_height
-        cv2.putText(frame, f'Area: {area}px²', (info_x + 120, info_y), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, self.colors['text'], 1)
-        
-        # Aspect ratio
-        aspect_ratio = box_width / box_height if box_height > 0 else 0
-        cv2.putText(frame, f'Ratio: {aspect_ratio:.2f}', (info_x + 120, info_y + 15), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, self.colors['text'], 1)
+        cv2.circle(frame, (center_x, center_y), 5, self.colors['box'], -1)
     
     def process_hands(self, frame):
-        """Process hand detection and return bounding box coordinates"""
+        """Process hand detection and return bounding box coordinates based on finger tips"""
         h, w, _ = frame.shape
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         results = self.hands.process(rgb_frame)
@@ -149,7 +144,7 @@ class HandTracker:
         if not results.multi_hand_landmarks:
             return None, frame
         
-        all_finger_tip_coords = []
+        all_relevant_tip_coords = []
         
         for hand_landmarks in results.multi_hand_landmarks:
             # Draw hand landmarks if enabled
@@ -160,29 +155,27 @@ class HandTracker:
                     self.mp_drawing_styles.get_default_hand_connections_style()
                 )
             
-            # Get finger tip coordinates
+            # Get only the coordinates for the thumb and index finger tips
             thumb_tip = hand_landmarks.landmark[self.mp_hands.HandLandmark.THUMB_TIP]
             index_finger_tip = hand_landmarks.landmark[self.mp_hands.HandLandmark.INDEX_FINGER_TIP]
             
-            # Convert to pixel coordinates
-            thumb_coords = (int(thumb_tip.x * w), int(thumb_tip.y * h))
-            index_coords = (int(index_finger_tip.x * w), int(index_finger_tip.y * h))
-            
-            all_finger_tip_coords.extend([thumb_coords, index_coords])
+            # Convert to pixel coordinates and add to list
+            all_relevant_tip_coords.append((int(thumb_tip.x * w), int(thumb_tip.y * h)))
+            all_relevant_tip_coords.append((int(index_finger_tip.x * w), int(index_finger_tip.y * h)))
             
             # Draw finger tip markers
-            cv2.circle(frame, thumb_coords, 8, (255, 0, 0), -1)  # Blue for thumb
-            cv2.circle(frame, index_coords, 8, (0, 0, 255), -1)  # Red for index
+            cv2.circle(frame, all_relevant_tip_coords[-2], 8, (255, 0, 0), -1)  # Blue for thumb
+            cv2.circle(frame, all_relevant_tip_coords[-1], 8, (0, 0, 255), -1)  # Red for index
         
-        if all_finger_tip_coords:
-            # Calculate bounding box
-            min_x = min(x for x, y in all_finger_tip_coords)
-            min_y = min(y for x, y in all_finger_tip_coords)
-            max_x = max(x for x, y in all_finger_tip_coords)
-            max_y = max(y for x, y in all_finger_tip_coords)
+        if all_relevant_tip_coords:
+            # Calculate bounding box from only the selected finger tips
+            min_x = min(x for x, y in all_relevant_tip_coords)
+            min_y = min(y for x, y in all_relevant_tip_coords)
+            max_x = max(x for x, y in all_relevant_tip_coords)
+            max_y = max(y for x, y in all_relevant_tip_coords)
             
             # Add padding
-            padding = 20
+            padding = 15
             min_x = max(0, min_x - padding)
             min_y = max(130, min_y - padding)  # Account for UI panel
             max_x = min(w, max_x + padding)
@@ -206,11 +199,6 @@ class HandTracker:
             return
         
         print("Hand Tracker Started!")
-        print("Controls:")
-        print("  'l' - Toggle hand landmarks")
-        print("  'f' - Toggle FPS display")
-        print("  'r' - Reset stabilization buffer")
-        print("  'q' - Quit application")
         
         while cap.isOpened():
             ret, frame = cap.read()
@@ -252,13 +240,10 @@ class HandTracker:
                 break
             elif key == ord('l'):
                 self.show_landmarks = not self.show_landmarks
-                print(f"Landmarks: {'ON' if self.show_landmarks else 'OFF'}")
             elif key == ord('f'):
                 self.show_fps = not self.show_fps
-                print(f"FPS Display: {'ON' if self.show_fps else 'OFF'}")
             elif key == ord('r'):
                 self.stabilization_buffer.clear()
-                print("Stabilization buffer reset")
         
         # Cleanup
         cap.release()

@@ -1,35 +1,34 @@
+import os
 import cv2
 import mediapipe as mp
-from google import genai
-import os
-from PIL import Image, ImageDraw, ImageFont
+import google.generativeai as genai
 import numpy as np
-import textwrap
-from dotenv import load_dotenv
 import time
-import threading
 import json
 from datetime import datetime
+from dotenv import load_dotenv
 
-# Load environment variables from a .env file
+# Load API key from .env file
 load_dotenv()
+API_KEY = os.getenv("API_KEY")
+
+if API_KEY:
+    genai.configure(api_key=API_KEY)
+else:
+    print("Warning: API key not found. Hand Poem Creator will not work.")
+    exit()
 
 class HandPoemCreator:
+    """
+    A class to create a hand-tracking application that generates poems.
+    It detects two hands to form a bounding box and then generates a poem
+    that is dynamically fitted into the box.
+    """
     def __init__(self):
-        # API Configuration
-        self.api_key = os.getenv("API_KEY")
-        if not self.api_key:
-            raise ValueError("API_KEY not found in environment variables. Please create a .env file.")
-        
-        genai.configure(api_key=self.api_key)
-        # --- FIX: Corrected the model name to a valid one ---
-        self.model = genai.GenerativeModel(model_name="gemini-2.0-flash-latest")
-        
         # MediaPipe setup
         self.mp_hands = mp.solutions.hands
         self.mp_drawing = mp.solutions.drawing_utils
         self.mp_drawing_styles = mp.solutions.drawing_styles
-        
         self.hands = self.mp_hands.Hands(
             static_image_mode=False,
             max_num_hands=2,
@@ -37,53 +36,40 @@ class HandPoemCreator:
             min_tracking_confidence=0.5
         )
         
+        # Configure the Gemini model
+        self.gemini_model = genai.GenerativeModel('gemini-1.5-flash-latest')
+
         # UI Configuration
         self.colors = {
-            'box': (0, 255, 0),
-            'text': (255, 255, 255),
-            'poem_text': (0, 255, 0),
-            'background': (0, 0, 0),
-            'accent': (255, 165, 0),
-            'error': (0, 0, 255)
+            'box': (255, 255, 255),  # Changed to White
+            'glow': (255, 255, 255), # Changed to White
+            'text': (0, 255, 0),     # Changed to Green
+            'background': (20, 20, 20),
+            'landmarks': (0, 255, 255),
+            'connections': (255, 0, 255)
         }
         
         # State variables
-        self.poem_text = "Position your hand and press 'p' to generate a poem!"
-        self.poem_generated = False
-        self.poem_topics = ["nature", "love", "dreams", "adventure", "friendship", "ocean", "mountains", "stars"]
-        self.current_topic_index = 0
+        self.topic = "Nature"
         self.show_landmarks = False
-        self.generating_poem = False
-        self.last_generation_time = 0
-        self.generation_cooldown = 3  # seconds
-        
-        # Font configuration
-        self.font_paths = ["arial.ttf", "Arial.ttf", "/System/Library/Fonts/Arial.ttf", 
-                          "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"]
-        self.base_font_path = self.find_font()
-        
-        # Stabilization
+        self.show_fps = True
         self.stabilization_buffer = []
-        self.buffer_size = 3
+        # Increased buffer size for greater stability
+        self.buffer_size = 10 
         
-        # Statistics
-        self.poems_generated = 0
-        self.saved_poems = []
-        
-        # FPS tracking
+        # FPS calculation
         self.fps_counter = 0
         self.fps_start_time = time.time()
         self.current_fps = 0
-    
-    def find_font(self):
-        """Find available font file"""
-        for font_path in self.font_paths:
-            if os.path.exists(font_path):
-                return font_path
-        return None  # Will use default font
-    
+        
+        # Poem state
+        self.poem_text = ""
+        self.poem_generated_count = 0
+        self.status_message = "Move hands to form a box."
+        self.user_poem = None # New variable to store user's poem
+        
     def calculate_fps(self):
-        """Calculate current FPS"""
+        """Calculate and update FPS"""
         self.fps_counter += 1
         if self.fps_counter >= 30:
             end_time = time.time()
@@ -92,382 +78,333 @@ class HandPoemCreator:
             self.fps_start_time = time.time()
     
     def stabilize_box(self, box_coords):
-        """Stabilize bounding box coordinates"""
+        """Stabilize bounding box using moving average"""
         self.stabilization_buffer.append(box_coords)
         if len(self.stabilization_buffer) > self.buffer_size:
             self.stabilization_buffer.pop(0)
         
-        if len(self.stabilization_buffer) == 0:
+        if not self.stabilization_buffer:
             return box_coords
         
+        # Calculate average
         avg_coords = np.mean(self.stabilization_buffer, axis=0)
         return tuple(map(int, avg_coords))
     
-    def get_new_poem_async(self, words, lines, topic):
-        """Generate poem in background thread"""
-        def generate():
-            try:
-                self.generating_poem = True
-                prompt = (f"Write a beautiful, creative poem about {topic}. "
-                         f"Keep it to approximately {words} words and {lines} lines. "
-                         f"Make it inspiring and emotionally resonant.")
-                
-                response = self.model.generate_content(prompt)
-                self.poem_text = response.text.strip()
-                self.poems_generated += 1
-                self.last_generation_time = time.time()
-                
-                # Save poem
-                poem_data = {
-                    "timestamp": datetime.now().isoformat(),
-                    "topic": topic,
-                    "words": words,
-                    "lines": lines,
-                    "text": self.poem_text
-                }
-                self.saved_poems.append(poem_data)
-                
-                print(f"Poem #{self.poems_generated} generated successfully!")
-                
-            except Exception as e:
-                print(f"Gemini API error: {e}")
-                self.poem_text = f"Error generating poem about {topic}.\nCheck API key and internet connection.\nTry again in a moment."
-            finally:
-                self.generating_poem = False
-                self.poem_generated = True
-        
-        thread = threading.Thread(target=generate)
-        thread.daemon = True
-        thread.start()
-    
     def draw_ui_panel(self, frame):
-        """Draw comprehensive UI panel"""
+        """Draw a sleek information panel at the top"""
         h, w = frame.shape[:2]
-        panel_height = 140
+        panel_height = 120
         
-        # Semi-transparent background
+        # Create a semi-transparent panel overlay with a smooth gradient effect
         overlay = frame.copy()
         cv2.rectangle(overlay, (0, 0), (w, panel_height), self.colors['background'], -1)
-        frame = cv2.addWeighted(overlay, 0.8, frame, 0.2, 0)
+        frame = cv2.addWeighted(overlay, 0.7, frame, 0.3, 0)
         
-        # Title with accent
-        cv2.putText(frame, "Hand Poem Creator", (10, 30), 
-                   cv2.FONT_HERSHEY_DUPLEX, 1.2, self.colors['accent'], 3)
+        # Draw a subtle line at the bottom of the panel for separation
+        cv2.line(frame, (0, panel_height), (w, panel_height), self.colors['box'], 2)
         
-        # Current topic
-        current_topic = self.poem_topics[self.current_topic_index]
-        cv2.putText(frame, f"Topic: {current_topic.title()}", (10, 60), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, self.colors['text'], 2)
+        # Title with a different font for emphasis
+        cv2.putText(frame, "Hand Poem Creator", (20, 25), 
+                    cv2.FONT_HERSHEY_COMPLEX, 1.0, self.colors['box'], 2)
         
-        # Statistics
-        cv2.putText(frame, f"Poems Generated: {self.poems_generated}", (250, 60), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, self.colors['text'], 1)
-        
-        # Status
-        if self.generating_poem:
-            status_text = "Generating poem..."
-            status_color = self.colors['accent']
-        elif self.poem_generated and not self.generating_poem:
-            status_text = "Poem ready! Move hand to see it."
-            status_color = self.colors['poem_text']
-        else:
-            status_text = "Position hand and press 'p' to generate"
-            status_color = self.colors['text']
-        
-        cv2.putText(frame, f"Status: {status_text}", (10, 85), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, status_color, 2)
-        
-        # Controls
-        controls = [
-            "'p' - Generate | 't' - Change topic | 'l' - Landmarks | 's' - Save poems | 'c' - Clear | 'q' - Quit"
+        # Instructions and info
+        lines = [
+            f"Topic: {self.topic}",
+            f"Status: {self.status_message}",
+            f"Poems Generated: {self.poem_generated_count}",
+            "Press 'p' to generate a poem, 'q' to quit."
         ]
         
-        cv2.putText(frame, controls[0], (10, 110), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, self.colors['text'], 1)
+        y_offset = 55
+        for line in lines:
+            cv2.putText(frame, line, (20, y_offset), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, self.colors['text'], 1)
+            y_offset += 25
         
-        # FPS and cooldown
-        fps_text = f"FPS: {self.current_fps:.1f}"
-        cv2.putText(frame, fps_text, (w - 120, 30), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, self.colors['text'], 1)
-        
-        # Generation cooldown
-        time_since_last = time.time() - self.last_generation_time
-        if time_since_last < self.generation_cooldown:
-            cooldown_remaining = self.generation_cooldown - time_since_last
-            cv2.putText(frame, f"Cooldown: {cooldown_remaining:.1f}s", (w - 150, 60), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, self.colors['accent'], 1)
+        if self.show_fps:
+            cv2.putText(frame, f"FPS: {self.current_fps:.1f}", (20, y_offset), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, self.colors['text'], 1)
         
         return frame
     
-    def render_poem_in_box(self, frame, box_coords):
-        """Render poem text within bounding box with enhanced styling"""
+    def draw_enhanced_box(self, frame, box_coords, box_width, box_height):
+        """Draw a visually enhanced bounding box with corner markers"""
+        min_x, min_y, max_x, max_y = box_coords
+        
+        # Add a "glow" effect by drawing a slightly larger, semi-transparent box
+        cv2.rectangle(frame, (min_x - 1, min_y - 1), (max_x + 1, max_y + 1), self.colors['glow'], 2)
+        cv2.rectangle(frame, (min_x, min_y), (max_x, max_y), self.colors['glow'], 1)
+
+        # Draw sleek corner markers
+        marker_size = 25
+        thickness = 2
+        # Top-left
+        cv2.line(frame, (min_x, min_y), (min_x + marker_size, min_y), self.colors['box'], thickness)
+        cv2.line(frame, (min_x, min_y), (min_x, min_y + marker_size), self.colors['box'], thickness)
+        # Top-right
+        cv2.line(frame, (max_x, min_y), (max_x - marker_size, min_y), self.colors['box'], thickness)
+        cv2.line(frame, (max_x, min_y), (max_x, min_y + marker_size), self.colors['box'], thickness)
+        # Bottom-left
+        cv2.line(frame, (min_x, max_y), (min_x + marker_size, max_y), self.colors['box'], thickness)
+        cv2.line(frame, (min_x, max_y), (min_x, max_y - marker_size), self.colors['box'], thickness)
+        # Bottom-right
+        cv2.line(frame, (max_x, max_y), (max_x - marker_size, max_y), self.colors['box'], thickness)
+        cv2.line(frame, (max_x, max_y), (max_x, max_y - marker_size), self.colors['box'], thickness)
+        
+        # Center point
+        center_x, center_y = (min_x + max_x) // 2, (min_y + max_y) // 2
+        cv2.circle(frame, (center_x, center_y), 5, self.colors['box'], -1)
+        
+        # Draw the poem inside the box if it exists
+        if self.poem_text:
+            self.draw_wrapped_text(frame, self.poem_text, box_coords)
+            
+    def draw_wrapped_text(self, frame, text, box_coords):
+        """
+        Draws text wrapped and scaled to fit dynamically inside a bounding box.
+        This version iteratively finds the best font scale for legibility.
+        """
         min_x, min_y, max_x, max_y = box_coords
         box_width = max_x - min_x
         box_height = max_y - min_y
         
-        if box_width < 50 or box_height < 30:
-            return frame
-        
-        # Dynamic font sizing
-        dynamic_font_size = min(100, max(12, int(box_width / 8)))
-        font = None
-        wrapped_lines = []
-        
-        for attempt in range(20):
-            try:
-                font = ImageFont.truetype(self.base_font_path, dynamic_font_size) if self.base_font_path else ImageFont.load_default()
-                
-                # Calculate average character width
-                test_text = "A"
-                if hasattr(font, 'getbbox'):
-                    avg_char_width = font.getbbox(test_text)[2]
-                else:
-                    avg_char_width = font.getsize(test_text)[0]
-                
-                max_chars = max(5, int((box_width - 40) / avg_char_width)) if avg_char_width > 0 else 10
-                wrapped_lines = textwrap.wrap(self.poem_text, width=max_chars)
-                
-                # Calculate total text height
-                if hasattr(font, 'getbbox'):
-                    line_height = font.getbbox(test_text)[3] + 6
-                else:
-                    line_height = font.getsize(test_text)[1] + 6
-                
-                total_text_height = len(wrapped_lines) * line_height
-                
-                if total_text_height <= box_height - 40:
-                    break
-                
-                dynamic_font_size -= 2
-                
-            except Exception as e:
-                print(f"Font error: {e}")
-                font = ImageFont.load_default()
-                wrapped_lines = textwrap.wrap(self.poem_text, width=20)
-                line_height = 20
-                break
-        
-        # Convert to PIL for better text rendering
-        pil_img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-        draw = ImageDraw.Draw(pil_img)
-        
-        # Create a separate transparent overlay for the poem background
-        overlay_img = Image.new('RGBA', pil_img.size, (0, 0, 0, 0))
-        overlay_draw = ImageDraw.Draw(overlay_img)
-        
-        # Draw semi-transparent background for poem
-        poem_bg_coords = [(min_x + 5, min_y + 5), (max_x - 5, max_y - 5)]
-        overlay_draw.rectangle(poem_bg_coords, fill=(0, 0, 0, 120))
-        
-        # Composite the overlay onto the main image
-        pil_img = Image.alpha_composite(pil_img.convert('RGBA'), overlay_img)
-        draw = ImageDraw.Draw(pil_img)
-        
-        # Draw poem text with shadow effect
-        padding = 20
-        text_y = min_y + padding
-        
-        for line in wrapped_lines:
-            if text_y + line_height > max_y - padding:
-                break
-            
-            # Shadow
-            draw.text((min_x + padding + 2, text_y + 2), line, font=font, fill=(0, 0, 0))
-            # Main text
-            draw.text((min_x + padding, text_y), line, font=font, fill=(0, 255, 0))
-            text_y += int(line_height)
-        
-        return cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+        if box_width <= 0 or box_height <= 0:
+            return
 
-    
-    def draw_enhanced_box(self, frame, box_coords):
-        """Draw enhanced bounding box with animations"""
-        min_x, min_y, max_x, max_y = box_coords
+        font = cv2.FONT_HERSHEY_COMPLEX # Changed font style for the poem
+        font_scale = 1.0  # Start with a good font scale
+        thickness = 1
         
-        # Animated border effect
-        pulse = int(abs(np.sin(time.time() * 3) * 10))
-        
-        # Main border
-        cv2.rectangle(frame, (min_x, min_y), (max_x, max_y), self.colors['box'], 3)
-        
-        # Pulsing corners
-        corner_size = 15 + pulse
-        corners = [(min_x, min_y), (max_x, min_y), (min_x, max_y), (max_x, max_y)]
-        
-        for corner in corners:
-            cv2.circle(frame, corner, corner_size // 2, self.colors['box'], -1)
-            cv2.circle(frame, corner, corner_size // 2, self.colors['accent'], 2)
-        
-        return frame
-    
+        # Find the best font scale that fits both horizontally and vertically
+        while font_scale > 0.1: # Prevent scale from getting too small
+            lines = []
+            current_line = ""
+            words = text.split(' ')
+
+            for word in words:
+                test_line = current_line + word + " "
+                text_size, _ = cv2.getTextSize(test_line, font, font_scale, thickness)
+                text_width, _ = text_size
+                
+                if text_width > box_width and len(current_line) > 0:
+                    lines.append(current_line.strip())
+                    current_line = word + " "
+                else:
+                    current_line = test_line
+            lines.append(current_line.strip())
+
+            # Calculate total height of the wrapped text
+            line_height = cv2.getTextSize("A", font, font_scale, thickness)[0][1] + 5 # Add extra space
+            total_text_height = len(lines) * line_height
+            
+            if total_text_height <= box_height:
+                break # Found a scale that fits
+            
+            font_scale -= 0.05 # Reduce font size and try again
+            
+        # Draw the lines with the final calculated font scale
+        y_offset = min_y + int(cv2.getTextSize("A", font, font_scale, thickness)[0][1]) + 10 # 10px padding from top
+        for line in lines:
+            text_size, _ = cv2.getTextSize(line, font, font_scale, thickness)
+            text_width, _ = text_size
+            
+            x_pos = min_x + (box_width - text_width) // 2 # Center text horizontally
+            cv2.putText(frame, line, (x_pos, y_offset), 
+                        font, font_scale, self.colors['text'], thickness)
+            y_offset += int(cv2.getTextSize("A", font, font_scale, thickness)[0][1]) + 5 # Use same spacing
+
     def process_hands(self, frame):
-        """Process hand detection"""
+        """Process hand detection and return bounding box coordinates based on finger tips"""
         h, w, _ = frame.shape
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         results = self.hands.process(rgb_frame)
         
-        if not results.multi_hand_landmarks:
+        if not results.multi_hand_landmarks or len(results.multi_hand_landmarks) < 2:
             return None, frame
         
-        all_finger_tip_coords = []
+        all_relevant_tip_coords = []
         
         for hand_landmarks in results.multi_hand_landmarks:
-            if self.show_landmarks:
-                self.mp_drawing.draw_landmarks(
-                    frame, hand_landmarks, self.mp_hands.HAND_CONNECTIONS,
-                    self.mp_drawing_styles.get_default_hand_landmarks_style(),
-                    self.mp_drawing_styles.get_default_hand_connections_style()
-                )
+            # Get the coordinates for the thumb and index finger tips
+            thumb_tip = hand_landmarks.landmark[self.mp_hands.HandLandmark.THUMB_TIP]
+            index_finger_tip = hand_landmarks.landmark[self.mp_hands.HandLandmark.INDEX_FINGER_TIP]
             
-            # Use all landmarks for a more stable bounding box
-            all_landmarks = [(int(lm.x * w), int(lm.y * h)) for lm in hand_landmarks.landmark]
-            all_finger_tip_coords.extend(all_landmarks)
-        
-        if all_finger_tip_coords:
-            min_x = min(x for x, y in all_finger_tip_coords)
-            min_y = min(y for x, y in all_finger_tip_coords)
-            max_x = max(x for x, y in all_finger_tip_coords)
-            max_y = max(y for x, y in all_finger_tip_coords)
+            # Convert to pixel coordinates and add to list
+            all_relevant_tip_coords.append((int(thumb_tip.x * w), int(thumb_tip.y * h)))
+            all_relevant_tip_coords.append((int(index_finger_tip.x * w), int(index_finger_tip.y * h)))
             
-            padding = 30
+        if all_relevant_tip_coords:
+            # Calculate bounding box from all selected finger tips
+            min_x = min(x for x, y in all_relevant_tip_coords)
+            min_y = min(y for x, y in all_relevant_tip_coords)
+            max_x = max(x for x, y in all_relevant_tip_coords)
+            max_y = max(y for x, y in all_relevant_tip_coords)
+            
+            # Add padding
+            padding = 15
             min_x = max(0, min_x - padding)
-            min_y = max(150, min_y - padding) # Avoid UI overlap
+            min_y = max(130, min_y - padding)  # Account for UI panel
             max_x = min(w, max_x + padding)
             max_y = min(h, max_y + padding)
             
             return (min_x, min_y, max_x, max_y), frame
         
         return None, frame
-    
-    def save_poems_to_file(self):
-        """Save all generated poems to JSON file in poems directory"""
-        if not self.saved_poems:
-            print("No poems to save!")
+
+    def save_poem(self):
+        """Saves the generated poem to a JSON file."""
+        if not self.poem_text:
             return
-    
+            
+        # Create the 'poems' directory if it doesn't exist
         poems_dir = "poems"
-        os.makedirs(poems_dir, exist_ok=True)
+        if not os.path.exists(poems_dir):
+            os.makedirs(poems_dir)
+
+        # Get current timestamp
+        now = datetime.now()
+        timestamp = now.isoformat()
+
+        # Count words and lines
+        words = len(self.poem_text.split())
+        lines = len(self.poem_text.strip().split('\n'))
+
+        # Create the data dictionary
+        poem_data = {
+            "timestamp": timestamp,
+            "topic": self.topic,
+            "words": words,
+            "lines": lines,
+            "text": self.poem_text
+        }
         
-        filename = f"poems_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        filepath = os.path.join(poems_dir, filename)
-    
-        try:
-            with open(filepath, 'w', encoding='utf-8') as f:
-                json.dump(self.saved_poems, f, indent=2, ensure_ascii=False)
-            print(f"Saved {len(self.saved_poems)} poems to {filepath}")
-        except Exception as e:
-            print(f"Error saving poems: {e}")
-    
+        # Generate filename from timestamp
+        filename = os.path.join(poems_dir, f"poem_{now.strftime('%Y%m%d_%H%M%S')}.json")
+
+        # Write the data to a JSON file
+        with open(filename, 'w') as f:
+            json.dump(poem_data, f, indent=2)
+        
+        self.status_message = f"Poem saved to {filename}"
+        print(self.status_message)
+
+    def get_user_choice(self):
+        """Asks the user to choose between writing their own poem or generating one."""
+        print("\n--- Hand Poem Creator ---")
+        print("Choose an option:")
+        print("1. Enter your own poem")
+        print("2. Generate a new poem")
+        choice = input("Enter your choice (1 or 2): ")
+        
+        if choice == '1':
+            user_input = input("Enter your poem (use '\\n' for new lines): ")
+            self.user_poem = user_input.replace('\\n', '\n')
+            self.status_message = "Your poem is loaded. Find the box to display it."
+        elif choice == '2':
+            self.user_poem = None
+            self.status_message = "Move hands to form a box and press 'p' to generate a poem."
+        else:
+            print("Invalid choice. Defaulting to generating a new poem.")
+            self.user_poem = None
+            self.status_message = "Invalid choice. Defaulting to generating a new poem. Move hands to form a box and press 'p' to generate a poem."
+
     def run(self):
-        """Main application loop"""
+        """Main application loop."""
+        
+        # Get user choice before starting the camera
+        self.get_user_choice()
+
         cap = cv2.VideoCapture(0)
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
         
         if not cap.isOpened():
             print("Error: Could not open camera")
             return
         
-        print("Hand Poem Creator Started!")
-        # Print all controls at startup
-        print("\n--- Controls ---")
-        print(" 'p': Generate a new poem based on hand gesture size.")
-        print(" 't': Cycle to the next poem topic.")
-        print(" 'l': Toggle visibility of hand landmarks.")
-        print(" 's': Save all generated poems to a JSON file.")
-        print(" 'c': Clear the current poem from the screen.")
-        print(" 'r': Reset the application state (poem count, etc.).")
-        print(" 'q': Quit the application.")
-        print("----------------\n")
+        # Set the window to fullscreen
+        cv2.namedWindow('Hand Poem Creator', cv2.WINDOW_NORMAL)
+        cv2.setWindowProperty('Hand Poem Creator', cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
         
+        print("Hand Poem Creator Started!")
+        
+        is_box_present = False
+
+        if self.user_poem:
+            self.poem_text = self.user_poem
+
         while cap.isOpened():
             ret, frame = cap.read()
             if not ret:
+                print("Error: Could not read frame")
                 continue
             
+            # Flip frame horizontally for mirror effect
             frame = cv2.flip(frame, 1)
-            self.calculate_fps()
             
+            # Calculate FPS
+            if self.show_fps:
+                self.calculate_fps()
+            
+            # Process hands
             box_coords, frame = self.process_hands(frame)
             
-            if box_coords:
-                stabilized_coords = self.stabilize_box(box_coords)
-                
-                if (stabilized_coords[2] - stabilized_coords[0] > 50 and 
-                    stabilized_coords[3] - stabilized_coords[1] > 30):
-                    
-                    frame = self.draw_enhanced_box(frame, stabilized_coords)
-                    
-                    if self.poem_generated and not self.generating_poem:
-                        frame = self.render_poem_in_box(frame, stabilized_coords)
+            is_box_present = box_coords is not None
             
+            if is_box_present:
+                # Stabilize bounding box
+                stabilized_coords = self.stabilize_box(box_coords)
+                min_x, min_y, max_x, max_y = stabilized_coords
+                
+                box_width = max_x - min_x
+                box_height = max_y - min_y
+                
+                # Draw enhanced bounding box
+                if box_width > 10 and box_height > 10:  # Minimum size threshold
+                    self.draw_enhanced_box(frame, stabilized_coords, box_width, box_height)
+                    self.status_message = "Box is ready. Press 'p' to generate."
+            else:
+                self.status_message = "Move both hands into view to form a box."
+            
+            # Draw UI panel
             frame = self.draw_ui_panel(frame)
+            
+            # Display frame
             cv2.imshow('Hand Poem Creator', frame)
             
+            # Handle key presses
             key = cv2.waitKey(1) & 0xFF
             
+            # Key 'p' to generate poem
+            if key == ord('p') and is_box_present:
+                if self.user_poem:
+                    self.status_message = "Your poem is already loaded."
+                else:
+                    self.status_message = "Generating poem..."
+                    try:
+                        # Make the prompt unique with a timestamp
+                        unique_prompt = f"Write a unique short poem about {self.topic} based on a hand gesture. Current time: {datetime.now().isoformat()}"
+                        response = self.gemini_model.generate_content(unique_prompt)
+                        self.poem_text = response.text
+                        self.poem_generated_count += 1
+                        self.status_message = "Poem ready!"
+                        # Save the generated poem
+                        self.save_poem()
+                    except genai.APIError as e:
+                        self.poem_text = ""
+                        self.status_message = f"API Error: {e}"
+                    except Exception as e:
+                        self.poem_text = ""
+                        self.status_message = f"Error: {e}"
+            
+            # Key 'q' to quit
             if key == ord('q'):
                 break
-            elif key == ord('p') and box_coords and not self.generating_poem:
-                if time.time() - self.last_generation_time >= self.generation_cooldown:
-                    min_x, min_y, max_x, max_y = box_coords
-                    box_width = max_x - min_x
-                    box_height = max_y - min_y
-                    
-                    words_per_line = max(3, min(12, int(box_width / 35)))
-                    num_lines = max(2, min(8, int(box_height / 25)))
-                    total_words = words_per_line * num_lines
-                    
-                    current_topic = self.poem_topics[self.current_topic_index]
-                    print(f"Generating poem about '{current_topic}'...")
-                    
-                    self.poem_generated = False
-                    self.get_new_poem_async(total_words, num_lines, current_topic)
-                else:
-                    remaining = self.generation_cooldown - (time.time() - self.last_generation_time)
-                    print(f"Please wait {remaining:.1f}s before generating another poem.")
-            
-            elif key == ord('t'):
-                self.current_topic_index = (self.current_topic_index + 1) % len(self.poem_topics)
-                print(f"Topic changed to: {self.poem_topics[self.current_topic_index].title()}")
-            
-            elif key == ord('l'):
-                self.show_landmarks = not self.show_landmarks
-                print(f"Hand landmarks: {'ON' if self.show_landmarks else 'OFF'}")
-            
-            elif key == ord('s'):
-                self.save_poems_to_file()
-            
-            elif key == ord('c'):
-                self.poem_text = "Position your hand and press 'p' to generate a poem!"
-                self.poem_generated = False
-                print("Current poem cleared.")
-            
-            elif key == ord('r'):
-                self.stabilization_buffer.clear()
-                self.poem_text = "Position your hand and press 'p' to generate a poem!"
-                self.poem_generated = False
-                self.poems_generated = 0
-                self.saved_poems.clear()
-                print("Application reset!")
-        
+
+        # Cleanup
         cap.release()
         cv2.destroyAllWindows()
         self.hands.close()
-        
-        if self.saved_poems:
-            print(f"\nYou generated {len(self.saved_poems)} poems.")
-            save_choice = input("Save poems to file before exiting? (y/n): ").lower().strip()
-            if save_choice == 'y':
-                self.save_poems_to_file()
-        
         print("Hand Poem Creator closed successfully!")
 
 if __name__ == "__main__":
-    try:
-        creator = HandPoemCreator()
-        creator.run()
-    except ValueError as e:
-        print(f"Configuration Error: {e}")
-    except Exception as e:
-        print(f"An unexpected error occurred: {e}")
+    app = HandPoemCreator()
+    app.run()

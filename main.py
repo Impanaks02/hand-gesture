@@ -12,7 +12,7 @@ def clear_screen():
 def display_menu():
     """Display the main menu"""
     print("=" * 50)
-    print("        HAND GESTURE APPLICATIONS")
+    print("         HAND GESTURE APPLICATIONS")
     print("=" * 50)
     print("1. Hand Tracker")
     print("2. Hand Poem Creator (requires Gemini API key)")
@@ -22,19 +22,19 @@ def display_menu():
 
 def run_hand_tracker():
     """Run the Hand Tracker application"""
+    print("Starting Hand Tracker...")
     try:
-        # Try to run using uv first
-        result = subprocess.run([sys.executable, "-m", "uv", "run", "hand_tracker.py"], 
-                              check=False)
-        if result.returncode != 0:
-            # Fallback to direct Python execution
-            subprocess.run([sys.executable, "hand_tracker.py"])
+        # Use shell=True to ensure the command is executed correctly in the shell
+        subprocess.run([sys.executable, "hand_track.py"], check=True, shell=True)
+    except subprocess.CalledProcessError as e:
+        print(f"Error running Hand Tracker: {e}")
     except FileNotFoundError:
-        # Fallback if uv is not available
-        subprocess.run([sys.executable, "hand_tracker.py"])
+        print("Error: hand_track.py not found. Make sure it's in the same directory.")
+    input("Press Enter to continue...")
 
 def run_poem_creator():
     """Run the Hand Poem Creator application"""
+    print("Starting Hand Poem Creator...")
     # Check if .env file exists with API key
     if not os.path.exists('.env'):
         print("Warning: .env file not found.")
@@ -47,13 +47,14 @@ def run_poem_creator():
     try:
         # Try to run using uv first
         result = subprocess.run([sys.executable, "-m", "uv", "run", "hand_poem_creator.py"], 
-                              check=False)
+                                check=False)
         if result.returncode != 0:
             # Fallback to direct Python execution
             subprocess.run([sys.executable, "hand_poem_creator.py"])
     except FileNotFoundError:
         # Fallback if uv is not available
         subprocess.run([sys.executable, "hand_poem_creator.py"])
+    input("Press Enter to continue...")
 
 def install_dependencies():
     """Install project dependencies"""
@@ -61,13 +62,13 @@ def install_dependencies():
     try:
         # Try using uv
         subprocess.run([sys.executable, "-m", "uv", "pip", "install", "-r", "requirements.txt"], 
-                      check=True)
+                       check=True)
         print("Dependencies installed successfully with uv!")
     except (FileNotFoundError, subprocess.CalledProcessError):
         # Fallback to pip
         try:
             subprocess.run([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"], 
-                          check=True)
+                           check=True)
             print("Dependencies installed successfully with pip!")
         except subprocess.CalledProcessError:
             print("Failed to install dependencies. Please check your Python setup.")
